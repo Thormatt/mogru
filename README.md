@@ -22,7 +22,7 @@
 
 ## Overview
 
-MoGRU augments the GRU with a **velocity state** and a **learned per-dimension momentum gate** (beta), giving hidden states second-order dynamics analogous to momentum in SGD. The model is a **strict generalization** of the GRU: when beta = 0, MoGRU recovers exact GRU behavior.
+MoGRU augments the GRU with a **velocity state** and a **learned per-dimension momentum gate** ($\beta_t$), giving hidden states second-order dynamics analogous to momentum in SGD. The model is a **strict generalization** of the GRU: when $\beta_t = 0$, MoGRU recovers exact GRU behavior (modulo the stabilizing LayerNorm, which our ablations show does not impact baseline performance).
 
 **Key findings:**
 - MoGRU achieves **perfect accuracy** on interference resistance at N <= 50 distractors, where GRU scores 0.77-0.82
@@ -34,23 +34,27 @@ MoGRU augments the GRU with a **velocity state** and a **learned per-dimension m
 ## Architecture
 
 Two states per cell:
-- **h_t** (position): hidden representation, same role as GRU hidden state
-- **v_t** (velocity): exponential moving average of state deltas
+- $h_t$ **(position):** hidden representation, same role as GRU hidden state
+- $v_t$ **(velocity):** exponential moving average of state deltas
 
-```
-[r_t, u_t] = sigma(W_ru [x_t, h_{t-1}])        # Standard GRU gates
-beta_t     = sigma(W_beta [x_t, h_{t-1}])       # Momentum retention (novel)
-h_tilde    = tanh(W_h x_t + U_h (r_t * h_{t-1}))  # Candidate
-d_t        = h_tilde - h_{t-1}                   # State delta
-v_t        = beta_t * v_{t-1} + (1 - beta_t) * d_t  # Velocity EMA
-h_t        = LayerNorm(h_{t-1} + u_t * v_t)     # Additive position step
-```
+$$
+\begin{align}
+[r_t, u_t] &= \sigma(W_{ru} [x_t, h_{t-1}]) & &\text{Standard GRU gates} \\
+\beta_t &= \sigma(W_\beta [x_t, h_{t-1}]) & &\text{Momentum retention (novel)} \\
+\tilde{h}_t &= \tanh(W_h x_t + U_h (r_t \odot h_{t-1})) & &\text{Candidate} \\
+d_t &= \tilde{h}_t - h_{t-1} & &\text{State delta} \\
+v_t &= \beta_t \odot v_{t-1} + (1 - \beta_t) \odot d_t & &\text{Velocity EMA} \\
+h_t &= \text{LayerNorm}(h_{t-1} + u_t \odot v_t) & &\text{Additive position step}
+\end{align}
+$$
 
-When beta -> 0, velocity equals the raw delta, and the update reduces to the standard GRU convex combination. The optimizer can "turn off" momentum per-dimension where it's unhelpful.
+When $\beta \to 0$, velocity equals the raw delta, and the update reduces to the standard GRU convex combination (inside a LayerNorm). The optimizer can "turn off" momentum per-dimension where it's unhelpful.
 
 ## Results
 
-### Benchmark (mean +/- std over 5 seeds, hidden=128)
+### Benchmark (mean $\pm$ std over 5 seeds, $h = 128$)
+
+MomGRU = MomentumRNN ([Nguyen et al., 2020](https://arxiv.org/abs/2006.06919)) applied to a GRU backbone: fixed $\mu = 0.9$ momentum on the input transformation, not on hidden-state dynamics.
 
 | Task | MoGRU | GRU | LSTM | MomGRU |
 |------|-------|-----|------|--------|
@@ -73,7 +77,7 @@ When beta -> 0, velocity equals the raw delta, and the update reduces to the sta
 
 MoGRU wins at moderate distractor loads. At N >= 100, accumulated distractor influence overwhelms the momentum buffer.
 
-### CWRU Bearing Fault Detection (real-world)
+### CWRU Bearing Fault Detection (4-class accuracy, real-world)
 
 | Noise sigma | GRU | LSTM | MoGRU | Winner |
 |-------------|-----|------|-------|--------|
@@ -88,24 +92,26 @@ GRU wins at all noise levels. Momentum smooths away high-frequency fault impulse
 
 ### Throughput (tokens/sec, CPU, batch=64)
 
-| Config | GRU | MoGRU | LSTM | Ratio |
-|--------|-----|-------|------|-------|
-| h=64, T=50 | 203,893 | 72,588 | 129,212 | 2.8x |
-| h=128, T=50 | 125,023 | 53,673 | 93,870 | 2.3x |
-| h=128, T=200 | 117,604 | 54,759 | 83,009 | 2.1x |
-| h=256, T=200 | 55,265 | 31,681 | 39,232 | 1.7x |
+$h$ = hidden dimension, $T$ = sequence length.
 
-### Ablation (selective copy, T=50)
+| Config | GRU | MoGRU | LSTM | GRU / MoGRU |
+|--------|-----|-------|------|-------------|
+| $h\!=\!64,\; T\!=\!50$ | 203,893 | 72,588 | 129,212 | 2.8x |
+| $h\!=\!128,\; T\!=\!50$ | 125,023 | 53,673 | 93,870 | 2.3x |
+| $h\!=\!128,\; T\!=\!200$ | 117,604 | 54,759 | 83,009 | 2.1x |
+| $h\!=\!256,\; T\!=\!200$ | 55,265 | 31,681 | 39,232 | 1.7x |
 
-| Variant | Val Acc | Delta |
-|---------|---------|-------|
+### Ablation (selective copy, $T = 50$)
+
+| Variant | Val Acc | $\Delta$ |
+|---------|---------|----------|
 | full_mogru | 1.000 | -- |
-| no_momentum (beta=0) | 1.000 | 0.000 |
-| **fixed_beta (beta=0.9)** | **0.730** | **-0.270** |
+| no_momentum ($\beta = 0$) | 1.000 | 0.000 |
+| **fixed_beta ($\beta = 0.9$)** | **0.730** | **-0.270** |
 | no_layernorm | 1.000 | 0.000 |
-| no_reset (r=1) | 1.000 | 0.000 |
+| no_reset ($r = 1$) | 1.000 | 0.000 |
 
-The learned per-dimension beta gate is the critical innovation. Fixed momentum is worse than no momentum.
+The learned per-dimension $\beta_t$ gate is the critical innovation. Fixed momentum is worse than no momentum. Note the irony: `no_momentum` ($\beta = 0$, i.e. pure GRU) solves the task perfectly, meaning the learned gate's "success" on this task is that it learns to drive $\beta \to 0$ -- effectively turning momentum off to recover GRU behavior where momentum hurts.
 
 ## Quick Start
 
@@ -169,10 +175,10 @@ mogru/
 If you find this work useful (even as a negative result), please cite:
 
 ```bibtex
-@article{matthiasson2025mogru,
+@article{matthiasson2026mogru,
   title   = {Momentum-Gated Recurrent Unit: When Second-Order Dynamics Help and When They Don't},
   author  = {Matthiasson, Thor},
-  year    = {2025},
+  year    = {2026},
   note    = {Available at \url{https://github.com/Thormatt/mogru}}
 }
 ```

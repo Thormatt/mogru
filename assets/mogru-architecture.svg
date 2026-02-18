@@ -168,9 +168,9 @@
   <rect x="580" y="80" width="295" height="72" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
   <text x="595" y="99" fill="#f0883e" font-size="10" font-weight="600">KEY INSIGHT</text>
   <text x="595" y="115" fill="#c9d1d9" font-size="10">When beta -> 0: v_t -> d_t, recovering</text>
-  <text x="595" y="129" fill="#c9d1d9" font-size="10">exact GRU update. The optimizer can</text>
-  <text x="595" y="143" fill="#c9d1d9" font-size="10">"turn off" momentum where unhelpful.</text>
+  <text x="595" y="129" fill="#c9d1d9" font-size="10">exact GRU update (modulo LayerNorm).</text>
+  <text x="595" y="143" fill="#c9d1d9" font-size="10">Optimizer can turn off momentum per-dim.</text>
 
   <!-- ====== EQUATION CALLOUTS ====== -->
-  <text x="450" y="495" text-anchor="middle" fill="#484f58" font-size="10">MoGRU: h_t = h_{t-1} + u_t * v_t   |   GRU: h_t = (1-u_t) * h_{t-1} + u_t * h~_t   |   Strict generalization when beta = 0</text>
+  <text x="450" y="495" text-anchor="middle" fill="#484f58" font-size="10">MoGRU: h_t = LN(h_{t-1} + u_t * v_t)   |   GRU: h_t = (1-u_t) * h_{t-1} + u_t * h~_t   |   Strict generalization when beta = 0 (modulo LN)</text>
 </svg>
