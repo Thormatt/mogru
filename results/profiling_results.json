@@ -1,0 +1,340 @@
+{
+  "experiment": "profiling",
+  "batch_size": 64,
+  "input_size": 1,
+  "configs": {
+    "h64_s50": {
+      "hidden_size": 64,
+      "seq_len": 50,
+      "batch_size": 64,
+      "models": {
+        "MoGRU": {
+          "params": 17024,
+          "tokens_per_sec": 72588.0,
+          "avg_time_ms": 44.08,
+          "peak_memory_mb": 0.09
+        },
+        "GRU": {
+          "params": 12864,
+          "tokens_per_sec": 203892.8,
+          "avg_time_ms": 15.69,
+          "peak_memory_mb": 0.0
+        },
+        "LSTM": {
+          "params": 17152,
+          "tokens_per_sec": 129212.1,
+          "avg_time_ms": 24.77,
+          "peak_memory_mb": 0.0
+        },
+        "MomGRU": {
+          "params": 12672,
+          "tokens_per_sec": 159926.6,
+          "avg_time_ms": 20.01,
+          "peak_memory_mb": 0.06
+        },
+        "SSM": {
+          "params": 29634,
+          "tokens_per_sec": 38035.6,
+          "avg_time_ms": 84.13,
+          "peak_memory_mb": 0.06
+        }
+      }
+    },
+    "h64_s100": {
+      "hidden_size": 64,
+      "seq_len": 100,
+      "batch_size": 64,
+      "models": {
+        "MoGRU": {
+          "params": 17024,
+          "tokens_per_sec": 64808.2,
+          "avg_time_ms": 98.75,
+          "peak_memory_mb": 0.17
+        },
+        "GRU": {
+          "params": 12864,
+          "tokens_per_sec": 208598.3,
+          "avg_time_ms": 30.68,
+          "peak_memory_mb": 0.0
+        },
+        "LSTM": {
+          "params": 17152,
+          "tokens_per_sec": 118940.8,
+          "avg_time_ms": 53.81,
+          "peak_memory_mb": 0.0
+        },
+        "MomGRU": {
+          "params": 12672,
+          "tokens_per_sec": 147861.5,
+          "avg_time_ms": 43.28,
+          "peak_memory_mb": 0.12
+        },
+        "SSM": {
+          "params": 29634,
+          "tokens_per_sec": 35011.1,
+          "avg_time_ms": 182.8,
+          "peak_memory_mb": 0.12
+        }
+      }
+    },
+    "h64_s200": {
+      "hidden_size": 64,
+      "seq_len": 200,
+      "batch_size": 64,
+      "models": {
+        "MoGRU": {
+          "params": 17024,
+          "tokens_per_sec": 66069.0,
+          "avg_time_ms": 193.74,
+          "peak_memory_mb": 0.45
+        },
+        "GRU": {
+          "params": 12864,
+          "tokens_per_sec": 210608.6,
+          "avg_time_ms": 60.78,
+          "peak_memory_mb": 0.0
+        },
+        "LSTM": {
+          "params": 17152,
+          "tokens_per_sec": 134367.8,
+          "avg_time_ms": 95.26,
+          "peak_memory_mb": 0.0
+        },
+        "MomGRU": {
+          "params": 12672,
+          "tokens_per_sec": 152447.1,
+          "avg_time_ms": 83.96,
+          "peak_memory_mb": 0.24
+        },
+        "SSM": {
+          "params": 29634,
+          "tokens_per_sec": 27362.6,
+          "avg_time_ms": 467.79,
+          "peak_memory_mb": 0.24
+        }
+      }
+    },
+    "h128_s50": {
+      "hidden_size": 128,
+      "seq_len": 50,
+      "batch_size": 64,
+      "models": {
+        "MoGRU": {
+          "params": 66816,
+          "tokens_per_sec": 53672.5,
+          "avg_time_ms": 59.62,
+          "peak_memory_mb": 0.09
+        },
+        "GRU": {
+          "params": 50304,
+          "tokens_per_sec": 125022.7,
+          "avg_time_ms": 25.6,
+          "peak_memory_mb": 0.0
+        },
+        "LSTM": {
+          "params": 67072,
+          "tokens_per_sec": 93869.9,
+          "avg_time_ms": 34.09,
+          "peak_memory_mb": 0.0
+        },
+        "MomGRU": {
+          "params": 49920,
+          "tokens_per_sec": 99841.7,
+          "avg_time_ms": 32.05,
+          "peak_memory_mb": 0.06
+        },
+        "SSM": {
+          "params": 116610,
+          "tokens_per_sec": 32909.0,
+          "avg_time_ms": 97.24,
+          "peak_memory_mb": 0.06
+        }
+      }
+    },
+    "h128_s100": {
+      "hidden_size": 128,
+      "seq_len": 100,
+      "batch_size": 64,
+      "models": {
+        "MoGRU": {
+          "params": 66816,
+          "tokens_per_sec": 52905.2,
+          "avg_time_ms": 120.97,
+          "peak_memory_mb": 0.17
+        },
+        "GRU": {
+          "params": 50304,
+          "tokens_per_sec": 118242.5,
+          "avg_time_ms": 54.13,
+          "peak_memory_mb": 0.0
+        },
+        "LSTM": {
+          "params": 67072,
+          "tokens_per_sec": 67623.4,
+          "avg_time_ms": 94.64,
+          "peak_memory_mb": 0.0
+        },
+        "MomGRU": {
+          "params": 49920,
+          "tokens_per_sec": 94210.0,
+          "avg_time_ms": 67.93,
+          "peak_memory_mb": 0.12
+        },
+        "SSM": {
+          "params": 116610,
+          "tokens_per_sec": 25502.5,
+          "avg_time_ms": 250.96,
+          "peak_memory_mb": 0.12
+        }
+      }
+    },
+    "h128_s200": {
+      "hidden_size": 128,
+      "seq_len": 200,
+      "batch_size": 64,
+      "models": {
+        "MoGRU": {
+          "params": 66816,
+          "tokens_per_sec": 54759.3,
+          "avg_time_ms": 233.75,
+          "peak_memory_mb": 0.34
+        },
+        "GRU": {
+          "params": 50304,
+          "tokens_per_sec": 117604.1,
+          "avg_time_ms": 108.84,
+          "peak_memory_mb": 0.0
+        },
+        "LSTM": {
+          "params": 67072,
+          "tokens_per_sec": 83008.6,
+          "avg_time_ms": 154.2,
+          "peak_memory_mb": 0.0
+        },
+        "MomGRU": {
+          "params": 49920,
+          "tokens_per_sec": 97746.2,
+          "avg_time_ms": 130.95,
+          "peak_memory_mb": 0.24
+        },
+        "SSM": {
+          "params": 116610,
+          "tokens_per_sec": 22345.6,
+          "avg_time_ms": 572.82,
+          "peak_memory_mb": 0.24
+        }
+      }
+    },
+    "h256_s50": {
+      "hidden_size": 256,
+      "seq_len": 50,
+      "batch_size": 64,
+      "models": {
+        "MoGRU": {
+          "params": 264704,
+          "tokens_per_sec": 31323.2,
+          "avg_time_ms": 102.16,
+          "peak_memory_mb": 0.09
+        },
+        "GRU": {
+          "params": 198912,
+          "tokens_per_sec": 47754.2,
+          "avg_time_ms": 67.01,
+          "peak_memory_mb": 0.0
+        },
+        "LSTM": {
+          "params": 265216,
+          "tokens_per_sec": 41199.5,
+          "avg_time_ms": 77.67,
+          "peak_memory_mb": 0.0
+        },
+        "MomGRU": {
+          "params": 198144,
+          "tokens_per_sec": 38911.0,
+          "avg_time_ms": 82.24,
+          "peak_memory_mb": 0.06
+        },
+        "SSM": {
+          "params": 462594,
+          "tokens_per_sec": 20715.3,
+          "avg_time_ms": 154.48,
+          "peak_memory_mb": 0.06
+        }
+      }
+    },
+    "h256_s100": {
+      "hidden_size": 256,
+      "seq_len": 100,
+      "batch_size": 64,
+      "models": {
+        "MoGRU": {
+          "params": 264704,
+          "tokens_per_sec": 34017.2,
+          "avg_time_ms": 188.14,
+          "peak_memory_mb": 0.17
+        },
+        "GRU": {
+          "params": 198912,
+          "tokens_per_sec": 51718.4,
+          "avg_time_ms": 123.75,
+          "peak_memory_mb": 0.0
+        },
+        "LSTM": {
+          "params": 265216,
+          "tokens_per_sec": 39684.0,
+          "avg_time_ms": 161.27,
+          "peak_memory_mb": 0.0
+        },
+        "MomGRU": {
+          "params": 198144,
+          "tokens_per_sec": 34552.4,
+          "avg_time_ms": 185.23,
+          "peak_memory_mb": 0.12
+        },
+        "SSM": {
+          "params": 462594,
+          "tokens_per_sec": 16151.7,
+          "avg_time_ms": 396.24,
+          "peak_memory_mb": 0.12
+        }
+      }
+    },
+    "h256_s200": {
+      "hidden_size": 256,
+      "seq_len": 200,
+      "batch_size": 64,
+      "models": {
+        "MoGRU": {
+          "params": 264704,
+          "tokens_per_sec": 31680.7,
+          "avg_time_ms": 404.03,
+          "peak_memory_mb": 0.34
+        },
+        "GRU": {
+          "params": 198912,
+          "tokens_per_sec": 55265.2,
+          "avg_time_ms": 231.61,
+          "peak_memory_mb": 0.0
+        },
+        "LSTM": {
+          "params": 265216,
+          "tokens_per_sec": 39232.4,
+          "avg_time_ms": 326.26,
+          "peak_memory_mb": 0.0
+        },
+        "MomGRU": {
+          "params": 198144,
+          "tokens_per_sec": 31520.2,
+          "avg_time_ms": 406.09,
+          "peak_memory_mb": 0.24
+        },
+        "SSM": {
+          "params": 462594,
+          "tokens_per_sec": 10304.0,
+          "avg_time_ms": 1242.23,
+          "peak_memory_mb": 0.24
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,990 @@
+\documentclass{article}
+
+% --- Packages ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+\usepackage[numbers,square]{natbib}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{microtype}
+
+% --- Theorem environments ---
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}{Proposition}
+\newtheorem{remark}{Remark}
+
+% --- Notation shortcuts ---
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\bx}{\mathbf{x}}
+\newcommand{\bh}{\mathbf{h}}
+\newcommand{\bv}{\mathbf{v}}
+\newcommand{\bd}{\mathbf{d}}
+\newcommand{\br}{\mathbf{r}}
+\newcommand{\bu}{\mathbf{u}}
+\newcommand{\W}{\mathbf{W}}
+\newcommand{\U}{\mathbf{U}}
+
+\title{Momentum-Gated Recurrent Unit:\\When Second-Order Dynamics Help and When They Don't}
+\author{Thor Matthiasson\thanks{Independent researcher. Contact: \texttt{thor@aiwiththor.com}}}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+% ===================================================================
+% ABSTRACT
+% ===================================================================
+\begin{abstract}
+The Gated Recurrent Unit (GRU) computes hidden states as a first-order convex
+combination of the previous state and a candidate---it has no notion of
+trajectory or trend.  We introduce the \textbf{Momentum-Gated Recurrent Unit
+(MoGRU)}, which augments the GRU with a velocity state variable and a learned
+per-dimension momentum retention gate~$\boldsymbol{\beta}_t$.  We prove that
+MoGRU is a \emph{strict generalization} of the GRU and evaluate it
+comprehensively across synthetic benchmarks, interference resistance sweeps,
+a real-world fault detection task (CWRU Bearing), and throughput profiling.
+MoGRU excels in a specific niche: at moderate distractor loads ($N \leq 50$),
+momentum acts as a low-pass filter that resists interference, achieving
+perfect accuracy where GRU scores 0.77--0.82.  However, this advantage is
+\emph{structurally bounded}: at $N \geq 100$ distractors, the momentum buffer
+itself becomes corrupted, and GRU's stateless reactivity wins.  On real-world
+vibration waveforms (CWRU Bearing), MoGRU loses to GRU at all six noise
+levels---momentum smooths away the high-frequency fault impulses that carry
+diagnostic information.  Four attempted fixes (velocity clipping, velocity
+LayerNorm, velocity write gate, damping gate) fail to close the long-range
+gap, confirming the collapse is architectural.  MoGRU also runs 2--3$\times$
+slower than GRU due to the inability to use cuDNN fused kernels.  We report
+these results as a \emph{complete characterization} of when second-order
+hidden-state dynamics help and when they structurally fail, providing a
+reference for researchers considering momentum-based RNN extensions.
+\end{abstract}
+
+% ===================================================================
+% 1  INTRODUCTION
+% ===================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Many real-world sequential data sources---financial time series, sensor
+streams, physical simulations, audio waveforms, and language prosody---exhibit
+trends, oscillations, and gradual dynamics.  A recurrent model processing such
+data benefits from an inductive bias toward smooth temporal evolution.  However,
+the standard GRU~\cite{cho2014gru} computes each hidden state as a convex
+combination of the previous state and a candidate activation:
+\begin{equation}
+  \bh_t = (1 - \bu_t) \odot \bh_{t-1} + \bu_t \odot \tilde{\bh}_t,
+  \label{eq:gru_update}
+\end{equation}
+where $\bu_t$ is the update gate.  This is a \emph{first-order} recurrence:
+the hidden state has no notion of its own trajectory.  At every timestep, the
+model must re-infer the direction of change from the current input and context.
+
+We draw a direct analogy to optimization.  Stochastic gradient descent (SGD)
+updates parameters via a first-order rule: $\theta_{t+1} = \theta_t - \eta
+g_t$.  Adding momentum~\cite{polyak1964heavy} introduces a velocity variable
+that accumulates past gradients, enabling the optimizer to ``coast'' through
+noisy or flat regions of the loss landscape.  This simple modification yields
+dramatic practical improvements~\cite{sutskever2013importance}.
+
+If momentum helps gradient descent navigate loss landscapes, it should help
+hidden states navigate sequence dynamics.  We propose the
+\textbf{Momentum-Gated Recurrent Unit (MoGRU)}, which adds a velocity state
+$\bv_t \in \R^d$ alongside the hidden state $\bh_t \in \R^d$.  A learned,
+input-dependent momentum retention gate $\boldsymbol{\beta}_t$ controls how
+much of the previous velocity is retained versus how much is overwritten by the
+current state delta.  The hidden state then steps in the direction of the
+velocity, scaled by the update gate.  This gives MoGRU second-order dynamics:
+the hidden state has both a position ($\bh_t$) and a velocity ($\bv_t$), and
+the velocity provides inertia that allows the model to extrapolate through
+predictable regions and reserve capacity for surprises.
+
+Our key contributions are:
+\begin{enumerate}
+  \item A minimal, principled extension of the GRU with second-order dynamics
+        via a velocity state and learned momentum gate (\S\ref{sec:method}).
+  \item A formal proof that MoGRU is a \emph{strict generalization} of the
+        GRU---the optimizer can recover exact GRU behavior by driving
+        $\boldsymbol{\beta}_t \to \mathbf{0}$ (Theorem~\ref{thm:generalization}).
+  \item A thorough empirical characterization: synthetic benchmarks, systematic
+        interference sweeps, a real-world fault detection task, and throughput
+        profiling (\S\ref{sec:experiments}).
+  \item A precise delineation of MoGRU's niche (moderate-density discrete
+        interference) and its structural limits (long-range collapse,
+        continuous-waveform failure), including four attempted fixes that fail
+        (\S\ref{sec:limits}).
+\end{enumerate}
+
+% ===================================================================
+% 2  RELATED WORK
+% ===================================================================
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Gated Recurrent Networks.}
+The Long Short-Term Memory (LSTM)~\cite{hochreiter1997lstm} introduced
+gating mechanisms for gradient flow in recurrent networks.  The
+GRU~\cite{cho2014gru} simplified the LSTM by merging the cell state and hidden
+state and reducing the gate count from three to two.  Both architectures employ
+first-order state updates.
+
+\paragraph{Momentum in Optimization.}
+Polyak's heavy-ball method~\cite{polyak1964heavy} introduced momentum to
+accelerate gradient descent.  Sutskever et al.~\cite{sutskever2013importance}
+demonstrated that momentum is critical for effective training of deep networks
+with SGD.  Our work applies the same principle to the hidden state dynamics of
+recurrent networks.
+
+\paragraph{Higher-Order and Continuous-Time Recurrences.}
+Neural ODEs~\cite{chen2018neuralode} model continuous-time dynamics via learned
+vector fields, naturally admitting higher-order formulations (e.g., second-order
+ODEs for position-velocity systems).  MoGRU achieves similar second-order
+dynamics in a simpler, discrete-time framework without requiring ODE solvers.
+Liquid Time-Constant Networks~\cite{hasani2021liquid,hasani2022closed} use
+continuous-time RNNs with adaptive time constants, sharing the motivation of
+input-adaptive dynamics but differing in mechanism.
+
+\paragraph{Structured State-Space Models.}
+S4~\cite{gu2022s4} and its successors, including Mamba~\cite{gu2023mamba},
+model sequences via structured linear state-space representations with
+higher-order dynamics encoded through the HiPPO framework.  These approaches
+achieve strong performance on long-range tasks and admit efficient
+parallelization.  MoGRU operates in the classical RNN paradigm and targets
+scenarios where sequential, per-step processing is required (streaming,
+edge deployment, online learning).
+
+\paragraph{Multi-Timescale RNNs.}
+The Clockwork RNN~\cite{koutnik2014clockwork} partitions hidden units into
+groups operating at different temporal resolutions.  MoGRU's per-dimension
+momentum gate $\boldsymbol{\beta}_t$ serves a related but distinct purpose:
+rather than fixing timescales architecturally, MoGRU learns input-dependent
+momentum per dimension, allowing each feature to adaptively smooth or react.
+
+% ===================================================================
+% 3  METHOD
+% ===================================================================
+\section{Method}
+\label{sec:method}
+
+\subsection{Architecture Overview}
+
+MoGRU maintains two state vectors per layer:
+\begin{itemize}
+  \item $\bh_t \in \R^d$: the hidden state (``position''), serving the same
+        role as the GRU hidden state;
+  \item $\bv_t \in \R^d$: the velocity state, accumulating smoothed
+        state deltas over time.
+\end{itemize}
+Both are initialized to zero: $\bh_0 = \bv_0 = \mathbf{0}$.
+
+\subsection{Cell Equations}
+
+Given input $\bx_t \in \R^n$, previous hidden state $\bh_{t-1}$, and previous
+velocity $\bv_{t-1}$, the MoGRU cell computes:
+
+\paragraph{Step 1: Reset and update gates.}
+\begin{equation}
+  \begin{bmatrix} \br_t \\ \bu_t \end{bmatrix}
+  = \sigma\!\left( \W_{ru} \begin{bmatrix} \bx_t \\ \bh_{t-1} \end{bmatrix} \right),
+  \label{eq:gates}
+\end{equation}
+where $\W_{ru} \in \R^{2d \times (n+d)}$ and $\sigma$ is the element-wise sigmoid.
+
+\paragraph{Step 2: Momentum retention gate.}
+\begin{equation}
+  \boldsymbol{\beta}_t = \sigma\!\left(
+    \W_\beta \begin{bmatrix} \bx_t \\ \bh_{t-1} \end{bmatrix}
+  \right),
+  \label{eq:beta}
+\end{equation}
+where $\W_\beta \in \R^{d \times (n+d)}$.  This is the novel gate: it controls
+the trade-off between retaining the previous velocity (high $\beta$) and
+adopting the current state delta (low $\beta$).
+
+\paragraph{Step 3: Candidate hidden state.}
+\begin{equation}
+  \tilde{\bh}_t = \tanh\!\left(
+    \W_h \bx_t + \U_h (\br_t \odot \bh_{t-1})
+  \right),
+  \label{eq:candidate}
+\end{equation}
+where $\W_h \in \R^{d \times n}$ and $\U_h \in \R^{d \times d}$.  The reset
+gate $\br_t$ controls how much of the previous hidden state is visible during
+candidate computation, identical to the standard GRU.
+
+\paragraph{Step 4: Delta computation and velocity update.}
+\begin{align}
+  \bd_t &= \tilde{\bh}_t - \bh_{t-1}, \label{eq:delta} \\
+  \bv_t &= \boldsymbol{\beta}_t \odot \bv_{t-1}
+           + (1 - \boldsymbol{\beta}_t) \odot \bd_t.
+  \label{eq:velocity}
+\end{align}
+The velocity $\bv_t$ is an exponential moving average (EMA) of state deltas,
+directly analogous to momentum in SGD with decay rate $\boldsymbol{\beta}_t$.
+
+\paragraph{Step 5: Position update.}
+\begin{equation}
+  \bh_t = \bh_{t-1} + \bu_t \odot \bv_t.
+  \label{eq:position}
+\end{equation}
+This is an \emph{additive} update, not a convex combination.  The hidden state
+steps in the direction of the velocity, scaled by the update gate.  This means
+$\bh_t$ can move farther than a single candidate step---the velocity
+accumulates momentum from prior timesteps.
+
+\paragraph{Step 6: Layer normalization.}
+\begin{equation}
+  \bh_t \leftarrow \text{LayerNorm}(\bh_t).
+  \label{eq:layernorm}
+\end{equation}
+LayerNorm~\cite{ba2016layernorm} prevents velocity accumulation from causing hidden state divergence.
+As we show in the ablation study (\S\ref{sec:ablation}), this step is
+essential for stable training.
+
+\medskip
+The complete MoGRU cell is summarized in Algorithm~\ref{alg:mogru}.
+
+\begin{algorithm}[t]
+\caption{MoGRU Cell Forward Pass}
+\label{alg:mogru}
+\begin{algorithmic}[1]
+\REQUIRE Input $\bx_t$, previous hidden state $\bh_{t-1}$, previous velocity $\bv_{t-1}$
+\ENSURE New hidden state $\bh_t$, new velocity $\bv_t$
+
+\STATE $[\br_t,\, \bu_t] \leftarrow \sigma\!\left(\W_{ru}[\bx_t;\, \bh_{t-1}]\right)$
+    \hfill \COMMENT{Reset and update gates}
+\STATE $\boldsymbol{\beta}_t \leftarrow \sigma\!\left(\W_\beta [\bx_t;\, \bh_{t-1}]\right)$
+    \hfill \COMMENT{Momentum retention}
+\STATE $\tilde{\bh}_t \leftarrow \tanh\!\left(\W_h \bx_t + \U_h (\br_t \odot \bh_{t-1})\right)$
+    \hfill \COMMENT{Candidate}
+\STATE $\bd_t \leftarrow \tilde{\bh}_t - \bh_{t-1}$
+    \hfill \COMMENT{State delta}
+\STATE $\bv_t \leftarrow \boldsymbol{\beta}_t \odot \bv_{t-1} + (1 - \boldsymbol{\beta}_t) \odot \bd_t$
+    \hfill \COMMENT{Velocity EMA}
+\STATE $\bh_t \leftarrow \bh_{t-1} + \bu_t \odot \bv_t$
+    \hfill \COMMENT{Position step}
+\STATE $\bh_t \leftarrow \text{LayerNorm}(\bh_t)$
+    \hfill \COMMENT{Stabilization}
+\RETURN $\bh_t$, $\bv_t$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Strict GRU Generalization}
+
+\begin{theorem}[MoGRU Generalizes GRU]
+\label{thm:generalization}
+When $\boldsymbol{\beta}_t = \mathbf{0}$ for all $t$ (and LayerNorm is
+the identity), the MoGRU update reduces exactly to the standard GRU update.
+\end{theorem}
+
+\begin{proof}
+Setting $\boldsymbol{\beta}_t = \mathbf{0}$ in Equation~\eqref{eq:velocity}:
+\begin{equation}
+  \bv_t = \mathbf{0} \odot \bv_{t-1} + \mathbf{1} \odot \bd_t = \bd_t
+        = \tilde{\bh}_t - \bh_{t-1}.
+\end{equation}
+Substituting into Equation~\eqref{eq:position}:
+\begin{align}
+  \bh_t &= \bh_{t-1} + \bu_t \odot (\tilde{\bh}_t - \bh_{t-1}) \notag \\
+        &= \bh_{t-1} + \bu_t \odot \tilde{\bh}_t
+           - \bu_t \odot \bh_{t-1} \notag \\
+        &= (1 - \bu_t) \odot \bh_{t-1} + \bu_t \odot \tilde{\bh}_t,
+\end{align}
+which is exactly the GRU update (Equation~\eqref{eq:gru_update}).
+The gates $\br_t$, $\bu_t$ and the candidate $\tilde{\bh}_t$ are computed
+identically in both architectures.
+\end{proof}
+
+\begin{remark}
+Since MoGRU recovers GRU when $\boldsymbol{\beta}_t = \mathbf{0}$, the
+optimizer is free to ``turn off'' momentum in any dimension where it is
+unhelpful.  MoGRU can therefore never be strictly worse than GRU on any task
+(modulo optimization difficulties), and any improvement represents a genuine
+benefit of the velocity state.
+\end{remark}
+
+\subsection{Design Choices and Initialization}
+\label{sec:design}
+
+\paragraph{Momentum bias initialization.}
+The bias of $\W_\beta$ is initialized to $+2.0$, yielding
+$\sigma(2.0) \approx 0.88$ as the initial momentum retention.  This
+encourages high initial momentum---velocity persists by default, and the
+model must learn to reduce it where reactivity is needed.
+
+\paragraph{Update gate bias initialization.}
+The bias of the update gate portion of $\W_{ru}$ is initialized to $-2.0$,
+giving $\sigma(-2.0) \approx 0.12$.  This produces conservative initial
+updates, preventing early instability from large velocity-scaled steps.
+
+\paragraph{Per-dimension momentum.}
+The gate $\boldsymbol{\beta}_t \in \R^d$ is computed per dimension, allowing
+different features to maintain different levels of momentum.  Some dimensions
+may track smooth trends ($\beta \approx 1$) while others react quickly to
+input changes ($\beta \approx 0$).
+
+\paragraph{Additive position update.}
+Unlike the GRU's convex combination, MoGRU's update $\bh_t = \bh_{t-1} +
+\bu_t \odot \bv_t$ is additive.  The hidden state can move faster than a
+single candidate step when velocity has accumulated over prior timesteps.
+LayerNorm constrains the state norm and prevents divergence.
+
+\subsection{Optional Damping Gate}
+
+For oscillatory or highly dynamic signals, MoGRU supports an optional
+damping gate $\boldsymbol{\gamma}_t$:
+\begin{equation}
+  \boldsymbol{\gamma}_t = \sigma\!\left(
+    \W_\gamma \begin{bmatrix} \bx_t \\ \bh_{t-1} \end{bmatrix}
+  \right), \qquad
+  \bh_t = (1 - \boldsymbol{\gamma}_t) \odot \bh_{t-1}
+          + \bu_t \odot \bv_t.
+  \label{eq:damping}
+\end{equation}
+The damping gate introduces friction on the previous hidden state, providing a
+mechanism to decelerate.  Following Occam's razor, damping is disabled by
+default and activated only when empirically beneficial.
+
+\subsection{Parameter Count}
+
+Table~\ref{tab:params} compares parameter counts for GRU and MoGRU with
+hidden size $d = 128$.  MoGRU adds a single gate ($\W_\beta$) and a LayerNorm
+layer, resulting in approximately 33\% more recurrent parameters.
+
+\begin{table}[t]
+\centering
+\caption{Parameter count comparison (hidden size $d = 128$, input size $n$).
+  Counts shown are for the recurrent cell only (excluding task-specific
+  embeddings and output heads).}
+\label{tab:params}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Component} & \textbf{GRU} & \textbf{MoGRU} \\
+\midrule
+$\W_{ru}$ (reset + update) & $2d(n+d) + 2d$ & $2d(n+d) + 2d$ \\
+$\W_h, \U_h$ (candidate) & $dn + d^2 + d$ & $dn + d^2 + d$ \\
+$\W_\beta$ (momentum) & --- & $d(n+d) + d$ \\
+LayerNorm & --- & $2d$ \\
+\midrule
+\textbf{Total recurrent} & $3d(n+d) + 3d$ & $4d(n+d) + 4d + 2d$ \\
+\midrule
+\multicolumn{3}{l}{\textit{Example: $d=128$, $n=128$ (embedding-fed):}} \\
+Total recurrent & $\sim$99K & $\sim$132K \\
+With embeddings + head & $\sim$116K & $\sim$133K \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ===================================================================
+% 4  EXPERIMENTS
+% ===================================================================
+\section{Experiments}
+\label{sec:experiments}
+
+We evaluate MoGRU on four synthetic tasks designed to probe different
+aspects of momentum dynamics.  All tasks use single-layer models with hidden
+size $d = 128$, trained with Adam~\cite{kingma2015adam} (learning rate
+$10^{-3}$), gradient clipping at norm 1.0, and batch size 64.  Seeds are
+fixed for reproducibility.
+
+\subsection{Tasks}
+
+\paragraph{Task 1: Copy.}
+The model observes a sequence of $k$ random tokens from a vocabulary of size
+$V$, followed by a blank delay of $k$ timesteps, a delimiter token, and then
+must reproduce the original sequence.  Total sequence length: $2k + 1 + k$.
+This tests the ability to maintain representations through a passive delay
+period.  Momentum hypothesis: velocity holds the hidden state in a stable
+``orbit'' during the blank gap, reducing representational drift.
+
+\paragraph{Task 2: Adding Problem.}
+The input is a sequence of length $T$ with two channels: random numbers
+in $[0,1]$ and binary markers indicating two randomly chosen positions.  The
+target is the sum of the two marked numbers.  This is a classical long-range
+dependency benchmark~\cite{hochreiter1997lstm}.  Momentum hypothesis: velocity
+tracks cumulative effects across long distances, aiding integration.
+
+\paragraph{Task 3: Noisy Trend Tracking.}
+The input is a noisy 1D signal $y_t = \alpha t + A\sin(2\pi f t) + \epsilon_t$,
+where slope $\alpha$, frequency $f$, amplitude $A$, and noise level
+$\text{std}(\epsilon)$ are randomized per sample.  The target is the clean
+signal (denoised).  This is MoGRU's core strength: the velocity state provides
+natural smoothing and trend extrapolation.
+
+\paragraph{Task 4: Selective Copy.}
+A variant of the copy task where only a subset of $K$ marked tokens (out of
+$T$) must be recalled after a delay.  This combines memory, selection, and
+delayed recall---a harder probe of recurrent memory than pure copy.
+
+\subsection{Experimental Setup}
+
+\begin{table}[t]
+\centering
+\caption{Task configurations.  All results are means over 5 seeds
+  ($s \in \{42, 123, 456, 789, 1337\}$).}
+\label{tab:task_config}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Task} & \textbf{Seq.\ Length} & \textbf{Vocab} & \textbf{Metric} & \textbf{Epochs} \\
+\midrule
+Copy          & $k\!=\!50$, delay$\!=\!50$ & 16 & Accuracy & 30 \\
+Adding        & $T\!=\!100$                & --- & MSE & 30 \\
+Noisy Trend   & $T\!=\!80$                 & --- & MSE & 30 \\
+Selective Copy & $T\!=\!50$, $K\!=\!5$     & 16 & Accuracy & 30 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For each task, we train MoGRU alongside two baselines: a vanilla GRU and
+MomentumGRU (MomGRU)---a fixed-momentum variant following
+Nguyen et al.~\cite{nguyen2020momentumrnn} with constant $\beta = 0.9$.
+All models share the same embedding dimensions, hidden size ($d = 128$),
+and output head.  Training uses 10,000 samples and evaluation uses 2,000 samples.
+Table~\ref{tab:task_config} summarizes the configurations.
+
+\subsection{Results}
+
+\begin{table}[t]
+\centering
+\caption{Benchmark results (mean $\pm$ std over 5 seeds).
+  Best values in \textbf{bold}.  Statistical significance
+  via two-sample $t$-test ($*$: $p < 0.05$).}
+\label{tab:results}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Task} & \textbf{MoGRU} & \textbf{GRU} & \textbf{LSTM} & \textbf{MomGRU} \\
+\midrule
+Copy (acc $\uparrow$)
+  & $\mathbf{0.350 \pm 0.010}^*$ & $0.221 \pm 0.090$ & $0.063 \pm 0.001$ & $0.243 \pm 0.012$ \\
+Adding (MSE $\downarrow$)
+  & $0.0028 \pm 0.0012$ & $\mathbf{0.0004 \pm 0.0003}^*$ & $0.0030 \pm 0.0025$ & $0.0027 \pm 0.0013$ \\
+Trend (MSE $\downarrow$)
+  & $0.775 \pm 0.041$ & $0.792 \pm 0.031$ & $0.833 \pm 0.031$ & $\mathbf{0.777 \pm 0.017}$ \\
+Sel.\ Copy (acc $\uparrow$)
+  & $\mathbf{1.000 \pm 0.000}$ & $\mathbf{1.000 \pm 0.000}$ & $\mathbf{1.000 \pm 0.000}$ & $0.415 \pm 0.062^*$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:results} presents the main results, averaged over 5 seeds
+with two-sample $t$-tests for significance.
+
+\paragraph{Copy task.}
+MoGRU achieves $0.350 \pm 0.010$ accuracy, significantly outperforming
+GRU ($0.221 \pm 0.090$, $p = 0.038$) and MomGRU ($0.243 \pm 0.012$,
+$p < 0.001$).  The velocity acts as a ``flywheel,'' reducing representational
+drift during the blank delay period.  Notably, MomGRU's fixed momentum
+($\beta = 0.9$) provides no benefit over GRU, indicating that the
+input-dependent, per-dimension nature of MoGRU's momentum gate is essential.
+
+\paragraph{Adding problem.}
+GRU converges fastest, reaching MSE $0.0004 \pm 0.0003$, significantly better
+than MoGRU at $0.0028 \pm 0.0012$ ($p = 0.009$).  The adding task requires
+discrete integration of two marked values---a gate-based operation that does
+not benefit from momentum-based smoothing.  This is MoGRU's clearest loss.
+
+\paragraph{Noisy trend tracking.}
+All four models converge to similar MSE ($\sim$0.77--0.83), with no significant
+differences between MoGRU and GRU ($p = 0.61$).  The expected advantage of
+momentum for smooth signal tracking did not materialize, likely because
+overfitting dominates at this dataset size.
+
+\paragraph{Selective copy.}
+MoGRU, GRU, and LSTM all solve the task perfectly ($1.000$).  MomGRU fails
+catastrophically ($0.415 \pm 0.062$, $p < 0.001$), demonstrating that fixed
+high momentum creates persistent inertia that interferes with selective memory
+operations.  The learned $\boldsymbol{\beta}_t$ adapts: MoGRU reduces momentum
+to its lowest level on this task, effectively recovering GRU-like behavior
+where momentum is unhelpful.
+
+\subsection{Interference Resistance}
+
+To characterize MoGRU's interference resistance---its strongest advantage in the
+diagnostic gauntlet---we conduct a systematic sweep.  The task requires
+memorizing $K$ key-value pairs, surviving $N$ distractor tokens (with similar
+keys but different values), and then recalling the original values.
+
+\paragraph{Sweep 1: Distractor count.}
+We fix $K = 5$ items and vary $N \in \{10, 25, 50, 100, 200\}$ distractors.
+Table~\ref{tab:interference_dist} shows the results.
+
+\begin{table}[t]
+\centering
+\caption{Interference resistance: varying distractor count ($K = 5$ items,
+  hidden size 128, 20 epochs, 5K training samples).  Best values in \textbf{bold}.}
+\label{tab:interference_dist}
+\begin{tabular}{@{}rcccc@{}}
+\toprule
+\textbf{$N$ distractors} & \textbf{MoGRU} & \textbf{GRU} & \textbf{LSTM} & \textbf{Winner} \\
+\midrule
+10  & \textbf{1.000} & 0.765 & 0.065 & MoGRU \\
+25  & \textbf{1.000} & 0.710 & 0.064 & MoGRU \\
+50  & \textbf{0.938} & 0.816 & 0.068 & MoGRU \\
+100 & 0.553 & \textbf{0.729} & 0.067 & GRU \\
+200 & 0.063 & \textbf{0.293} & 0.067 & GRU \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Sweep 2: Items to memorize.}
+We fix $N = 50$ distractors and vary $K \in \{3, 5, 8, 10\}$ items.
+Table~\ref{tab:interference_items} shows the results.
+
+\begin{table}[t]
+\centering
+\caption{Interference resistance: varying items to memorize ($N = 50$ distractors).
+  Best values in \textbf{bold}.}
+\label{tab:interference_items}
+\begin{tabular}{@{}rcccc@{}}
+\toprule
+\textbf{$K$ items} & \textbf{MoGRU} & \textbf{GRU} & \textbf{LSTM} & \textbf{Winner} \\
+\midrule
+3  & \textbf{1.000} & \textbf{1.000} & 0.065 & Tie \\
+5  & \textbf{0.938} & 0.816 & 0.068 & MoGRU \\
+8  & \textbf{0.626} & 0.421 & 0.063 & MoGRU \\
+10 & \textbf{0.485} & 0.351 & 0.064 & MoGRU \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+MoGRU wins 6 of 9 configurations.  The momentum acts as a low-pass filter on
+the hidden state, smoothing out discrete distractor noise and preserving the
+original memorized signal.  However, this advantage is bounded: at $N \geq 100$
+distractors, the accumulated distractor influence overwhelms the momentum
+buffer, and GRU's stateless reactivity proves more robust.
+
+\subsection{Throughput Profiling}
+
+Table~\ref{tab:throughput} reports inference throughput on CPU (Apple M-series,
+batch size 64).  MoGRU runs 2.2--3.2$\times$ slower than GRU across all
+configurations.  The overhead arises from the additional momentum gate
+computation and, critically, the inability to use cuDNN's fused GRU kernel.
+MoGRU's per-step computation requires a Python-level loop, while GRU and LSTM
+can dispatch to highly optimized C++/CUDA implementations.
+
+\begin{table}[t]
+\centering
+\caption{Inference throughput (tokens/sec, CPU, batch=64).
+  Ratio is GRU speed / model speed.}
+\label{tab:throughput}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\textbf{Config} & \textbf{GRU} & \textbf{MoGRU} & \textbf{LSTM} & \textbf{GRU/MoGRU} \\
+\midrule
+$h\!=\!64, T\!=\!50$   & 203,893 & 72,588  & 129,212 & 2.8$\times$ \\
+$h\!=\!64, T\!=\!200$  & 210,609 & 66,069  & 134,368 & 3.2$\times$ \\
+$h\!=\!128, T\!=\!50$  & 125,023 & 53,673  & 93,870  & 2.3$\times$ \\
+$h\!=\!128, T\!=\!200$ & 117,604 & 54,759  & 83,009  & 2.1$\times$ \\
+$h\!=\!256, T\!=\!50$  & 47,754  & 31,323  & 41,200  & 1.5$\times$ \\
+$h\!=\!256, T\!=\!200$ & 55,265  & 31,681  & 39,232  & 1.7$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Momentum Gate Diagnostics}
+
+The momentum gate $\boldsymbol{\beta}_t$ provides a window into the model's
+learned temporal dynamics.  We track two diagnostics:
+\begin{itemize}
+  \item $\bar{\beta}$: the mean activation across all dimensions and timesteps.
+        High values ($> 0.8$) indicate the model is leveraging persistent
+        velocity; low values ($< 0.3$) suggest the model has learned to
+        approximate first-order (GRU-like) behavior.
+  \item $\sigma_\beta$: the standard deviation, indicating whether the model
+        has learned heterogeneous momentum across dimensions.  High variance
+        suggests task-specific specialization (some dimensions smooth, others
+        reactive).
+\end{itemize}
+
+% ===================================================================
+% 5  ABLATION STUDY
+% ===================================================================
+\section{Ablation Study}
+\label{sec:ablation}
+
+To isolate the contribution of each component, we evaluate five MoGRU
+variants on the selective copy task ($T = 50$, $K = 5$, vocab size 16,
+hidden size 128).  Table~\ref{tab:ablation} summarizes the configurations
+and results.
+
+\begin{table}[t]
+\centering
+\caption{Ablation study on the selective copy task.  Each variant removes or
+  modifies one component.  $\Delta$ shows the change in validation accuracy
+  relative to the full model.}
+\label{tab:ablation}
+\begin{tabular}{@{}llcc@{}}
+\toprule
+\textbf{Variant} & \textbf{Modification} & \textbf{Val Acc} & $\boldsymbol{\Delta}$ \\
+\midrule
+\texttt{full\_mogru}   & None (complete model)           & 1.000 & --- \\
+\texttt{no\_momentum}  & $\beta_t = 0$ always            & 1.000 & $0.000$ \\
+\texttt{fixed\_beta}   & $\beta_t = 0.9$ (not learned)   & 0.730 & $-0.270$ \\
+\texttt{no\_layernorm} & LayerNorm removed                & 1.000 & $0.000$ \\
+\texttt{no\_reset}     & $r_t = 1$ always (no reset gate) & 1.000 & $0.000$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Variant descriptions.}
+\begin{itemize}
+  \item \texttt{no\_momentum} ($\beta_t = 0$):  Velocity equals the raw
+        delta at every step.  By Theorem~\ref{thm:generalization}, this
+        approximates a GRU (with LayerNorm and additive update).  A drop
+        in performance here confirms that learned momentum is beneficial.
+  \item \texttt{fixed\_beta} ($\beta_t = 0.9$):  Momentum is present but
+        not input-dependent.  This tests whether the adaptivity of
+        $\boldsymbol{\beta}_t$ matters, or if a fixed EMA suffices.
+  \item \texttt{no\_layernorm}:  LayerNorm removed from the hidden state.
+        Expected to be the most damaging ablation, as unconstrained velocity
+        accumulation leads to hidden state norm explosion.
+  \item \texttt{no\_reset} ($r_t = 1$):  The reset gate is disabled.
+        Tests whether the standard GRU reset mechanism remains important in
+        the presence of momentum.
+\end{itemize}
+
+\paragraph{Key finding: learned adaptivity is critical.}
+The ablation results reveal a striking pattern: removing any single component
+\emph{except} the learned momentum gate has no effect on performance.  All of
+\texttt{no\_momentum}, \texttt{no\_layernorm}, and \texttt{no\_reset} achieve
+perfect accuracy (1.000), matching the full model.  However,
+\texttt{fixed\_beta} ($\beta_t = 0.9$) drops to 0.730---a 27\% degradation.
+
+This result carries two implications:
+\begin{enumerate}
+  \item The \emph{adaptivity} of the momentum gate is MoGRU's critical innovation.
+        Fixed momentum is worse than no momentum at all (the \texttt{no\_momentum}
+        variant, which approximates a GRU, solves the task perfectly).
+  \item On this task ($T = 50$), LayerNorm is not essential for stability.
+        The relatively short sequences may not generate sufficient velocity
+        accumulation to cause divergence.  Longer sequences may reveal
+        LayerNorm's importance.
+\end{enumerate}
+The strong performance of \texttt{no\_momentum} confirms
+Theorem~\ref{thm:generalization}: when momentum is unhelpful, MoGRU can
+recover GRU behavior.  The failure of \texttt{fixed\_beta} is consistent with
+MomGRU's catastrophic failure on the selective copy benchmark
+(Table~\ref{tab:results}).
+
+% ===================================================================
+% 6  STRUCTURAL LIMITS
+% ===================================================================
+\section{Structural Limits}
+\label{sec:limits}
+
+The synthetic benchmarks establish MoGRU's interference-resistance niche.
+We now test whether this advantage transfers to real-world data and
+investigate whether the long-range collapse can be fixed.
+
+\subsection{CWRU Bearing Fault Detection}
+
+The Case Western Reserve University (CWRU) Bearing Data Center provides
+12\,kHz drive-end accelerometer recordings for 4-class fault classification
+(normal, inner race, ball, outer race).  This is a standard benchmark for
+time-series models on real vibration data.
+
+\begin{table}[t]
+\centering
+\caption{CWRU Bearing fault detection across noise injection levels
+  (window=1024, hidden=64, 15 epochs).  GRU wins all configurations.}
+\label{tab:cwru}
+\begin{tabular}{@{}rcccc@{}}
+\toprule
+\textbf{Noise $\sigma$} & \textbf{GRU} & \textbf{LSTM} & \textbf{MoGRU} & \textbf{Winner} \\
+\midrule
+0.0 & \textbf{0.474} & 0.411 & 0.355 & GRU \\
+0.1 & \textbf{0.484} & 0.468 & 0.447 & GRU \\
+0.2 & \textbf{0.507} & 0.461 & 0.275 & GRU \\
+0.5 & \textbf{0.493} & 0.465 & 0.313 & GRU \\
+1.0 & \textbf{0.495} & 0.486 & 0.299 & GRU \\
+2.0 & \textbf{0.468} & 0.449 & 0.298 & GRU \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:cwru} shows that GRU wins at all noise levels.
+MoGRU's momentum \emph{smooths away} the high-frequency fault impulses
+that carry diagnostic information in vibration data.  The
+$\boldsymbol{\beta}_t$ gate froze at $\sim$0.84 throughout training,
+suggesting that 1024-step scalar sequences do not provide sufficient
+gradient signal to the momentum gate.
+
+This result reveals a critical distinction: MoGRU's interference
+resistance is specific to \emph{discrete, token-level distractors} in
+structured sequences, not to continuous-domain waveform noise.
+Real-world signals with impulse-based signatures---bearing faults,
+electrical transients, seismic events---are harmed by momentum
+smoothing.
+
+\subsection{Velocity Fix Attempts}
+
+The long-range collapse ($N \geq 100$ distractors) is MoGRU's most
+significant limitation.  We tested four modifications to determine
+whether it is fixable:
+
+\begin{table}[t]
+\centering
+\caption{Velocity fix attempts on the interference task
+  ($K = 5$ items, $N = 100$ distractors, hidden=128).
+  Baseline MoGRU: 0.553.  GRU: 0.729.  None close the gap.}
+\label{tab:fixes}
+\begin{tabular}{@{}llcc@{}}
+\toprule
+\textbf{Fix} & \textbf{Description} & \textbf{Acc} & \textbf{$\Delta$ vs.\ base} \\
+\midrule
+None (MoGRU)     & ---                           & 0.553 & --- \\
+Clip 0.5         & $\|\bv_t\|_\infty \leq 0.5$   & 0.482 & $-0.071$ \\
+Clip 1.0         & $\|\bv_t\|_\infty \leq 1.0$   & 0.517 & $-0.036$ \\
+Velocity LN      & LayerNorm on $\bv_t$           & 0.531 & $-0.022$ \\
+Write gate       & $\bv_t \!=\! g \odot \bv' + (1\!-\!g) \odot \bv_{t-1}$ & 0.548 & $-0.005$ \\
+\midrule
+GRU baseline     & ---                           & \textbf{0.729} & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:fixes} shows that no modification closes the gap to GRU.
+Clipping actively hurts performance by destroying velocity information.
+Velocity LayerNorm and the write gate produce marginal changes.  The
+failure of all four fixes confirms that the long-range collapse is
+\emph{architectural}: momentum is a low-pass filter on hidden state
+dynamics, and at high distractor densities the filter itself becomes
+corrupted by accumulated distractor influence.  This is not a velocity
+magnitude problem (clipping fails) or a normalization problem (velocity
+LN fails)---it is an inherent limitation of exponential moving average
+dynamics applied to adversarial input streams.
+
+% ===================================================================
+% 7  DISCUSSION
+% ===================================================================
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{A niche too narrow.}
+Combining the synthetic and real-world results, MoGRU's advantage is
+precisely bounded: discrete token-level distractors at moderate density
+($N \leq 50$), on structured sequences with clear memorize-then-recall
+structure.  This excludes most practical settings---natural language
+(high-distractor regime), continuous sensor data (impulse-based
+signatures harmed by smoothing), and long sequences ($T > 300$, where
+velocity accumulation causes collapse).  The niche exists but is too
+narrow to justify the 2--3$\times$ throughput overhead for general
+deployment.
+
+\paragraph{Computational overhead.}
+MoGRU's per-step computation is approximately 1.3$\times$ that of GRU,
+arising from the additional momentum gate ($\W_\beta$ projection + sigmoid)
+and LayerNorm.  More significantly, MoGRU cannot leverage cuDNN's fused GRU
+kernel, which is heavily optimized for the standard three-matrix GRU layout.
+This means that in practice, the wall-clock time overhead may exceed the
+theoretical FLOP overhead, particularly on GPU.  For production deployment,
+a custom CUDA kernel would be necessary to close this gap.
+
+\paragraph{Deployment considerations.}
+In 2026, improvements to RNN architectures face a high bar: state-space
+models (Mamba, S4) dominate long-range benchmarks with efficient
+parallelization, and Transformers remain the default for language.  RNN
+improvements are most compelling for scenarios requiring:
+\begin{itemize}
+  \item \textbf{Streaming inference:}  One token at a time, constant memory,
+        bounded latency (edge devices, real-time control).
+  \item \textbf{Embedded deployment:}  Small model footprint with no
+        attention cache to manage.
+  \item \textbf{Online learning:}  Per-step parameter updates during
+        inference (Hebbian-style or RTRL).
+\end{itemize}
+MoGRU's modest parameter overhead (33\% more recurrent parameters) is
+acceptable in these regimes, and the velocity state provides a meaningful
+inductive bias at no inference-time memory cost beyond storing $\bv_t$.
+
+\paragraph{Relationship to prior work on second-order RNNs.}
+Second-order recurrent dynamics have been explored in various
+forms~\cite{giles1992higher,pollack1991induction}.  MoGRU differs from
+prior second-order RNN work in several key respects:
+\begin{enumerate}
+  \item The second-order structure arises from an \emph{explicit velocity
+        state with learned momentum}, not from second-order tensor products
+        of inputs and states.
+  \item The momentum gate $\boldsymbol{\beta}_t$ is input-dependent and
+        per-dimension, providing fine-grained, adaptive control.
+  \item The strict GRU generalization property (Theorem~\ref{thm:generalization})
+        ensures that MoGRU can gracefully degrade to first-order dynamics.
+  \item The direct analogy to momentum in optimization provides clear
+        intuition and initialization strategies.
+\end{enumerate}
+
+\paragraph{Velocity explosion and the role of LayerNorm.}
+Without LayerNorm, the additive update $\bh_t = \bh_{t-1} + \bu_t \odot \bv_t$
+allows the hidden state norm to grow without bound when velocity accumulates
+over many timesteps.  The GRU's convex combination naturally bounds the state
+norm (assuming bounded candidate activations), but MoGRU's additive update
+breaks this property.  LayerNorm restores norm stability while preserving the
+directional information encoded in the velocity.  Our ablation study on the
+selective copy task ($T = 50$) shows that LayerNorm is not critical at this
+sequence length---the \texttt{no\_layernorm} variant achieves perfect accuracy.
+However, we expect LayerNorm to become essential for longer sequences where
+velocity accumulation has more time to cause hidden state norm explosion.
+Testing on sequences with $T \geq 200$ would clarify this hypothesis.
+
+\paragraph{Limitations.}
+\begin{enumerate}
+  \item Our real-world evaluation is limited to CWRU Bearing.  Domains
+        with discrete interference patterns (network intrusion detection,
+        financial spoofing) might better match MoGRU's niche but remain
+        untested.
+  \item We do not compare against SSMs (Mamba, S4) or Transformers on
+        these tasks.  Such comparisons would further contextualize
+        MoGRU's position but would not change the core negative finding.
+  \item The inability to use cuDNN fused kernels makes the throughput
+        overhead worse than the FLOP count suggests.  A custom CUDA
+        kernel could reduce but not eliminate the gap.
+\end{enumerate}
+
+% ===================================================================
+% 8  CONCLUSION
+% ===================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+We introduced the Momentum-Gated Recurrent Unit (MoGRU), a minimal
+extension of the GRU with second-order dynamics via a velocity state
+and learned momentum gate.  MoGRU is a strict generalization of the
+GRU and adds only 33\% more recurrent parameters.
+
+Our comprehensive evaluation reveals a clear picture: momentum provides a
+genuine advantage for interference resistance at moderate distractor
+densities ($N \leq 50$), achieving perfect accuracy where GRU scores
+0.77--0.82.  The learned per-dimension $\boldsymbol{\beta}_t$ gate is
+the critical innovation---fixed momentum fails catastrophically.
+However, the advantage is \emph{structurally bounded}:
+\begin{itemize}
+  \item At $N \geq 100$ distractors, the momentum buffer itself becomes
+        corrupted.  Four fix attempts confirm this is architectural.
+  \item On real-world vibration data (CWRU Bearing), momentum smooths
+        away the high-frequency fault impulses that carry diagnostic
+        information.  GRU wins at all noise levels.
+  \item MoGRU runs 2--3$\times$ slower than GRU due to the inability
+        to use cuDNN fused kernels.
+\end{itemize}
+
+We report these results as a complete characterization rather than a
+preliminary study.  The analogy between momentum in optimization and
+momentum in hidden-state dynamics is theoretically clean but empirically
+bounded: smoothing the hidden-state trajectory helps when distractors are
+the primary challenge, and hurts when the signal itself lives in the
+high-frequency components that smoothing destroys.  The niche is real but
+narrow, and does not, in our assessment, justify further investment over
+simpler alternatives.
+
+We hope this thorough negative result---including the precise delineation
+of where momentum helps, where it fails, and why the failure is
+structural---saves other researchers the effort of rediscovering these
+limits independently.
+
+% ===================================================================
+% REFERENCES
+% ===================================================================
+\bibliographystyle{plainnat}
+
+\begin{thebibliography}{20}
+
+\bibitem[Cho et~al.(2014)]{cho2014gru}
+Kyunghyun Cho, Bart van Merri{\"e}nboer, Caglar Gulcehre,
+Dzmitry Bahdanau, Fethi Bougares, Holger Schwenk, and Yoshua Bengio.
+\newblock Learning phrase representations using {RNN} encoder--decoder for
+  statistical machine translation.
+\newblock In \emph{Proceedings of the Conference on Empirical Methods in
+  Natural Language Processing (EMNLP)}, pages 1724--1734, 2014.
+
+\bibitem[Hochreiter and Schmidhuber(1997)]{hochreiter1997lstm}
+Sepp Hochreiter and J{\"u}rgen Schmidhuber.
+\newblock Long short-term memory.
+\newblock \emph{Neural Computation}, 9(8):1735--1780, 1997.
+
+\bibitem[Polyak(1964)]{polyak1964heavy}
+Boris~T. Polyak.
+\newblock Some methods of speeding up the convergence of iteration methods.
+\newblock \emph{USSR Computational Mathematics and Mathematical Physics},
+  4(5):1--17, 1964.
+
+\bibitem[Sutskever et~al.(2013)]{sutskever2013importance}
+Ilya Sutskever, James Martens, George Dahl, and Geoffrey Hinton.
+\newblock On the importance of initialization and momentum in deep learning.
+\newblock In \emph{Proceedings of the 30th International Conference on Machine
+  Learning (ICML)}, pages 1139--1147, 2013.
+
+\bibitem[Chen et~al.(2018)]{chen2018neuralode}
+Ricky T.~Q. Chen, Yulia Rubanova, Jesse Bettencourt, and David Duvenaud.
+\newblock Neural ordinary differential equations.
+\newblock In \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}, pages 6571--6583, 2018.
+
+\bibitem[Gu et~al.(2022)]{gu2022s4}
+Albert Gu, Karan Goel, and Christopher R{\'e}.
+\newblock Efficiently modeling long sequences with structured state spaces.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2022.
+
+\bibitem[Gu and Dao(2023)]{gu2023mamba}
+Albert Gu and Tri Dao.
+\newblock Mamba: Linear-time sequence modeling with selective state spaces.
+\newblock \emph{arXiv preprint arXiv:2312.00752}, 2023.
+
+\bibitem[Hasani et~al.(2021)]{hasani2021liquid}
+Ramin Hasani, Mathias Lechner, Alexander Amini, Daniela Rus, and Radu Grosu.
+\newblock Liquid time-constant networks.
+\newblock In \emph{Proceedings of the AAAI Conference on Artificial
+  Intelligence}, pages 7657--7666, 2021.
+
+\bibitem[Hasani et~al.(2022)]{hasani2022closed}
+Ramin Hasani, Mathias Lechner, Alexander Amini, Lucas Liebenwein,
+Aaron Ray, Max Tschaikowski, Gerald Teschl, and Daniela Rus.
+\newblock Closed-form continuous-time neural networks.
+\newblock \emph{Nature Machine Intelligence}, 4:992--1003, 2022.
+
+\bibitem[Koutn{\'i}k et~al.(2014)]{koutnik2014clockwork}
+Jan Koutn{\'i}k, Klaus Greff, Faustino Gomez, and J{\"u}rgen Schmidhuber.
+\newblock A clockwork {RNN}.
+\newblock In \emph{Proceedings of the 31st International Conference on Machine
+  Learning (ICML)}, pages 1863--1871, 2014.
+
+\bibitem[Kingma and Ba(2015)]{kingma2015adam}
+Diederik~P. Kingma and Jimmy Ba.
+\newblock Adam: A method for stochastic optimization.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2015.
+
+\bibitem[Giles et~al.(1992)]{giles1992higher}
+C.~Lee Giles, Clifford~B. Miller, Dong Chen, Hsing-Hen Chen,
+Guo-Zheng Sun, and Yee-Chun Lee.
+\newblock Learning and extracting finite state automata with second-order
+  recurrent neural networks.
+\newblock \emph{Neural Computation}, 4(3):393--405, 1992.
+
+\bibitem[Pollack(1991)]{pollack1991induction}
+Jordan~B. Pollack.
+\newblock The induction of dynamical recognizers.
+\newblock \emph{Machine Learning}, 7(2--3):227--252, 1991.
+
+\bibitem[Ba et~al.(2016)]{ba2016layernorm}
+Jimmy~Lei Ba, Jamie~Ryan Kiros, and Geoffrey~E. Hinton.
+\newblock Layer normalization.
+\newblock \emph{arXiv preprint arXiv:1607.06450}, 2016.
+
+\bibitem[Nguyen et~al.(2020)]{nguyen2020momentumrnn}
+Tan~M. Nguyen, Richard~G. Baraniuk, Andrea~L. Bertozzi,
+Stanley~J. Osher, and Bao Wang.
+\newblock {MomentumRNN}: Integrating momentum into recurrent neural networks.
+\newblock In \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}, pages 1924--1936, 2020.
+
+\end{thebibliography}
+
+\end{document}

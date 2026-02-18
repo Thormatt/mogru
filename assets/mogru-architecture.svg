@@ -1,0 +1,176 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0d1117"/>
+      <stop offset="100%" style="stop-color:#161b22"/>
+    </linearGradient>
+    <linearGradient id="boxGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#21262d"/>
+      <stop offset="100%" style="stop-color:#161b22"/>
+    </linearGradient>
+    <linearGradient id="betaGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#f0883e"/>
+      <stop offset="100%" style="stop-color:#d47620"/>
+    </linearGradient>
+    <linearGradient id="gateGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#388bfd"/>
+      <stop offset="100%" style="stop-color:#1f6feb"/>
+    </linearGradient>
+    <linearGradient id="stateGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#3fb950"/>
+      <stop offset="100%" style="stop-color:#238636"/>
+    </linearGradient>
+    <marker id="arrowWhite" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#8b949e" stroke-width="1.2"/>
+    </marker>
+    <marker id="arrowOrange" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#f0883e" stroke-width="1.2"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#388bfd" stroke-width="1.2"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#3fb950" stroke-width="1.2"/>
+    </marker>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="520" rx="12" fill="url(#bgGrad)"/>
+  <rect width="900" height="520" rx="12" fill="none" stroke="#30363d" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="450" y="38" text-anchor="middle" fill="#f0f6fc" font-size="20" font-weight="600">MoGRU Cell Architecture</text>
+  <text x="450" y="58" text-anchor="middle" fill="#8b949e" font-size="12">Position-Velocity Dual State with Learned Momentum Gate</text>
+
+  <!-- ====== INPUT ====== -->
+  <rect x="30" y="220" width="80" height="40" rx="6" fill="url(#boxGrad)" stroke="#484f58" stroke-width="1.2"/>
+  <text x="70" y="244" text-anchor="middle" fill="#f0f6fc" font-size="13" font-weight="500">x_t</text>
+  <text x="70" y="275" text-anchor="middle" fill="#8b949e" font-size="10">input</text>
+
+  <!-- ====== GATES REGION ====== -->
+  <!-- Reset + Update Gates (fused) -->
+  <rect x="170" y="120" width="110" height="50" rx="8" fill="url(#gateGrad)" fill-opacity="0.15" stroke="#388bfd" stroke-width="1.5"/>
+  <text x="225" y="143" text-anchor="middle" fill="#388bfd" font-size="12" font-weight="600">r_t , u_t</text>
+  <text x="225" y="158" text-anchor="middle" fill="#6e7681" font-size="9">reset + update</text>
+
+  <!-- Beta Gate (momentum) -->
+  <rect x="170" y="195" width="110" height="50" rx="8" fill="url(#betaGrad)" fill-opacity="0.2" stroke="#f0883e" stroke-width="1.5" filter="url(#glow)"/>
+  <text x="225" y="220" text-anchor="middle" fill="#f0883e" font-size="13" font-weight="700">beta_t</text>
+  <text x="225" y="235" text-anchor="middle" fill="#6e7681" font-size="9">momentum gate</text>
+
+  <!-- Candidate -->
+  <rect x="170" y="275" width="110" height="50" rx="8" fill="url(#boxGrad)" stroke="#484f58" stroke-width="1.2"/>
+  <text x="225" y="298" text-anchor="middle" fill="#c9d1d9" font-size="12" font-weight="500">h_tilde</text>
+  <text x="225" y="313" text-anchor="middle" fill="#6e7681" font-size="9">candidate</text>
+
+  <!-- ====== VELOCITY COMPUTATION ====== -->
+  <!-- Delta -->
+  <rect x="370" y="275" width="90" height="40" rx="6" fill="url(#boxGrad)" stroke="#484f58" stroke-width="1.2"/>
+  <text x="415" y="298" text-anchor="middle" fill="#c9d1d9" font-size="12">d_t = h~ - h</text>
+  <text x="415" y="265" text-anchor="middle" fill="#6e7681" font-size="9">delta</text>
+
+  <!-- Velocity EMA -->
+  <rect x="520" y="185" width="140" height="60" rx="8" fill="url(#betaGrad)" fill-opacity="0.15" stroke="#f0883e" stroke-width="1.5" filter="url(#glow)"/>
+  <text x="590" y="210" text-anchor="middle" fill="#f0883e" font-size="11" font-weight="600">v_t = beta * v_{t-1}</text>
+  <text x="590" y="228" text-anchor="middle" fill="#f0883e" font-size="11" font-weight="600">+ (1-beta) * d_t</text>
+  <text x="590" y="173" text-anchor="middle" fill="#f0883e" font-size="10" font-weight="500">Velocity EMA</text>
+
+  <!-- ====== POSITION UPDATE ====== -->
+  <rect x="520" y="310" width="140" height="50" rx="8" fill="url(#stateGrad)" fill-opacity="0.15" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="590" y="333" text-anchor="middle" fill="#3fb950" font-size="11" font-weight="600">h_t = h_{t-1} + u * v</text>
+  <text x="590" y="350" text-anchor="middle" fill="#6e7681" font-size="9">additive update</text>
+  <text x="590" y="300" text-anchor="middle" fill="#3fb950" font-size="10" font-weight="500">Position Step</text>
+
+  <!-- LayerNorm -->
+  <rect x="710" y="310" width="90" height="50" rx="8" fill="url(#boxGrad)" stroke="#484f58" stroke-width="1.2"/>
+  <text x="755" y="335" text-anchor="middle" fill="#c9d1d9" font-size="11" font-weight="500">LayerNorm</text>
+  <text x="755" y="350" text-anchor="middle" fill="#6e7681" font-size="9">stabilize</text>
+
+  <!-- ====== OUTPUT STATES ====== -->
+  <!-- h_t output -->
+  <rect x="830" y="290" width="50" height="35" rx="6" fill="url(#stateGrad)" fill-opacity="0.3" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="855" y="312" text-anchor="middle" fill="#3fb950" font-size="13" font-weight="700">h_t</text>
+
+  <!-- v_t output -->
+  <rect x="830" y="185" width="50" height="35" rx="6" fill="url(#betaGrad)" fill-opacity="0.3" stroke="#f0883e" stroke-width="1.5"/>
+  <text x="855" y="207" text-anchor="middle" fill="#f0883e" font-size="13" font-weight="700">v_t</text>
+
+  <!-- ====== PREVIOUS STATES (left side, bottom) ====== -->
+  <rect x="30" y="380" width="70" height="35" rx="6" fill="url(#stateGrad)" fill-opacity="0.15" stroke="#3fb950" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="65" y="402" text-anchor="middle" fill="#3fb950" font-size="11" font-weight="500">h_{t-1}</text>
+
+  <rect x="30" y="430" width="70" height="35" rx="6" fill="url(#betaGrad)" fill-opacity="0.15" stroke="#f0883e" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="65" y="452" text-anchor="middle" fill="#f0883e" font-size="11" font-weight="500">v_{t-1}</text>
+
+  <!-- ====== ARROWS ====== -->
+  <!-- x_t to gates -->
+  <line x1="110" y1="235" x2="168" y2="145" stroke="#8b949e" stroke-width="1.2" marker-end="url(#arrowWhite)"/>
+  <line x1="110" y1="240" x2="168" y2="220" stroke="#8b949e" stroke-width="1.2" marker-end="url(#arrowWhite)"/>
+  <line x1="110" y1="245" x2="168" y2="300" stroke="#8b949e" stroke-width="1.2" marker-end="url(#arrowWhite)"/>
+
+  <!-- h_{t-1} to gates -->
+  <path d="M100,395 L140,395 L140,145 L168,145" fill="none" stroke="#3fb950" stroke-width="1" stroke-opacity="0.6" marker-end="url(#arrowGreen)"/>
+  <path d="M100,400 L145,400 L145,220 L168,220" fill="none" stroke="#3fb950" stroke-width="1" stroke-opacity="0.6" marker-end="url(#arrowGreen)"/>
+  <path d="M100,405 L150,405 L150,300 L168,300" fill="none" stroke="#3fb950" stroke-width="1" stroke-opacity="0.6" marker-end="url(#arrowGreen)"/>
+
+  <!-- h_{t-1} to delta (subtraction) -->
+  <path d="M100,410 L350,410 L350,298 L368,298" fill="none" stroke="#3fb950" stroke-width="1" stroke-opacity="0.5" marker-end="url(#arrowGreen)"/>
+
+  <!-- h_{t-1} to position update -->
+  <path d="M100,415 L500,415 L500,340 L518,340" fill="none" stroke="#3fb950" stroke-width="1" stroke-opacity="0.5" marker-end="url(#arrowGreen)"/>
+
+  <!-- v_{t-1} to velocity EMA -->
+  <path d="M100,447 L505,447 L505,215 L518,215" fill="none" stroke="#f0883e" stroke-width="1.2" stroke-opacity="0.6" marker-end="url(#arrowOrange)"/>
+
+  <!-- candidate to delta -->
+  <line x1="280" y1="295" x2="368" y2="295" stroke="#8b949e" stroke-width="1.2" marker-end="url(#arrowWhite)"/>
+
+  <!-- beta to velocity -->
+  <line x1="280" y1="215" x2="518" y2="215" stroke="#f0883e" stroke-width="1.2" marker-end="url(#arrowOrange)"/>
+
+  <!-- delta to velocity -->
+  <path d="M460,290 L490,290 L490,225 L518,225" fill="none" stroke="#8b949e" stroke-width="1.2" marker-end="url(#arrowWhite)"/>
+
+  <!-- u to position update -->
+  <path d="M280,145 Q 310,145 310,160 L310,335 L518,335" fill="none" stroke="#388bfd" stroke-width="1.2" marker-end="url(#arrowBlue)"/>
+
+  <!-- velocity to position update -->
+  <path d="M590,245 L590,298" fill="none" stroke="#f0883e" stroke-width="1.2" marker-end="url(#arrowOrange)"/>
+
+  <!-- position to LayerNorm -->
+  <line x1="660" y1="335" x2="708" y2="335" stroke="#3fb950" stroke-width="1.2" marker-end="url(#arrowGreen)"/>
+
+  <!-- LayerNorm to h_t -->
+  <line x1="800" y1="335" x2="808" y2="335" stroke="#3fb950" stroke-width="1.2"/>
+  <path d="M808,335 L818,335 L818,307 L828,307" fill="none" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+
+  <!-- Velocity to v_t output -->
+  <path d="M660,210 L830,202" fill="none" stroke="#f0883e" stroke-width="1.5" marker-end="url(#arrowOrange)"/>
+
+  <!-- ====== LEGEND ====== -->
+  <rect x="30" y="80" width="12" height="12" rx="2" fill="#388bfd" fill-opacity="0.4"/>
+  <text x="48" y="91" fill="#8b949e" font-size="10">Standard GRU gates</text>
+
+  <rect x="170" y="80" width="12" height="12" rx="2" fill="#f0883e" fill-opacity="0.4"/>
+  <text x="188" y="91" fill="#8b949e" font-size="10">Momentum (novel)</text>
+
+  <rect x="310" y="80" width="12" height="12" rx="2" fill="#3fb950" fill-opacity="0.4"/>
+  <text x="328" y="91" fill="#8b949e" font-size="10">Hidden state flow</text>
+
+  <!-- ====== KEY INSIGHT BOX ====== -->
+  <rect x="580" y="80" width="295" height="72" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="595" y="99" fill="#f0883e" font-size="10" font-weight="600">KEY INSIGHT</text>
+  <text x="595" y="115" fill="#c9d1d9" font-size="10">When beta -> 0: v_t -> d_t, recovering</text>
+  <text x="595" y="129" fill="#c9d1d9" font-size="10">exact GRU update. The optimizer can</text>
+  <text x="595" y="143" fill="#c9d1d9" font-size="10">"turn off" momentum where unhelpful.</text>
+
+  <!-- ====== EQUATION CALLOUTS ====== -->
+  <text x="450" y="495" text-anchor="middle" fill="#484f58" font-size="10">MoGRU: h_t = h_{t-1} + u_t * v_t   |   GRU: h_t = (1-u_t) * h_{t-1} + u_t * h~_t   |   Strict generalization when beta = 0</text>
+</svg>
